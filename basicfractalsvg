@@ -1,0 +1,266 @@
+#!/usr/bin/env ruby
+
+# Copyright 2020 Ahmet Cetinkaya
+
+# This file is part of basicfractalsvg.
+
+# basicfractalsvg is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# basicfractalsvg is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with basicfractalsvg.  If not, see <http://www.gnu.org/licenses/>.
+
+require "parslet"
+require 'victor'
+
+class LineParser < Parslet::Parser
+  rule(:space) { match("\s").repeat }
+  rule(:lpar) { str("(") }
+  rule(:rpar) { str(")") }
+  rule(:name) { match('[A-Z]').repeat(1) }
+
+  def spa(range)
+    space >> match(range) >> space
+  end
+
+  rule(:integer) { (match("[\-]").maybe >> match(['0-9']).repeat(1)).as(:integer) }
+
+  rule(:float) { (match("[\-]").maybe >> match('[0-9]').repeat >> str('.') >>
+                  match('[0-9]').repeat).as(:float) }
+
+  rule(:point) { (lpar >> exp.as(:x) >>
+                  str(",") >> space >>
+                  exp.as(:y) >> rpar).as(:point) }
+
+  rule(:from_to) { point.maybe.as(:from) >> str("-") >> point.as(:to) }
+
+  rule(:var) { name.as(:var_name) }
+
+  rule(:mul_op) { spa('[\/\*]') }
+
+  rule(:add_op) { spa('[\+\-]') }
+
+  rule(:pow_op) { spa('[\^]') }
+
+  rule(:mod_op) { str(" MOD ") }
+
+  rule(:comp_op) { spa('[<>]') }
+
+  rule(:negation) { (str("-") >> exp).as(:negation) }
+
+  rule(:funcall) { name.as(:fun_name) >> lpar >> exp.as(:arg) >> rpar }
+
+  rule(:bracket) { lpar >> exp >> rpar | lpar >> negation >> rpar}
+
+  rule(:expression_atom) { funcall | var | bracket | float | integer | negation }
+
+  rule(:exp) { (infix_expression(expression_atom, [pow_op, 4], [mul_op, 3], [mod_op, 3], [add_op, 2], [comp_op, 1])).as(:exp) }
+
+  rule(:rem) { (str("REM") >> space >> (str("***") >> match("[\s:\'A-Z]").repeat >> str("***")).as(:comment)).as(:rem) }
+
+  rule(:window) { (str("WINDOW") >> space >>
+                   str("(") >> exp.as(:x1) >> str(",") >> space >>
+                   exp.as(:y1) >> str(")") >> str("-") >>
+                   str("(") >> exp.as(:x2) >> str(",") >> space >>
+                   exp.as(:y2) >> str(")")).as(:window) }
+
+  rule(:next) { (str("NEXT") >> space >> var).as("NEXT") }
+
+  rule(:randomize) { (str("RANDOMIZE") >> space >> (integer | var).as(:seed)).as(:randomize) }
+
+  rule(:line) { (str("LINE") >> space >> from_to).as(:line) }
+
+  rule(:screen) { (str("SCREEN") >> space >> integer.as(:value)).as(:screen) }
+
+  rule(:assignment) { (match('[A-Z]').repeat(1).as(:assignee) >> str("=") >> exp.as(:assigned_exp)).as(:assignment)}
+
+  rule(:array_assignment) { (match('[A-Z]').repeat(1).as(:array_assignee) >> str("(") >> exp.as(:index) >> str(")") >> str("=") >> exp.as(:assigned_exp)).as(:array_assignment)}
+
+  rule(:cls) { str("CLS") }
+
+  rule(:beep) { str("BEEP") }
+
+  rule(:dim) { (str("DIM") >> space >>
+                var >> str("(") >>
+                var.as(:size) >> str(")")).as(:dim) }
+
+  rule(:pset) { (str("PSET") >> space >> point).as(:pset)}
+
+  rule(:for_loop) { (str("FOR") >> space >> match('[A-Z]').repeat(1).as(:for_variable) >>
+                     str("=") >> exp.as(:for_start_value) >> space >> str("TO") >> space >> exp.as(:for_to_value) >>
+                     (space >> str("STEP") >> space >> float).maybe.as(:for_step_size)).as(:for_loop)}
+
+  rule(:for_next) { (str("NEXT") >> space >> match("[A-Z]").repeat(1).as(:for_variable)).as(:for_next)}
+
+  rule(:if_statement) { (str("IF") >> space >> exp.as(:condition) >> space >> str("THEN") >> space >> any.repeat(1).as(:then_statement_str)).as(:if_statement) }
+
+  rule(:line) { (str("LINE") >> space >> from_to).as(:line) }
+
+  rule(:input_char) { (var >> str("$=INPUT$(") >> integer.as(:count) >> str(")")).as(:input_char) }
+
+  rule(:program_end) { (str("END")).as(:program_end) }
+
+  rule(:goto) { (str("GOTO") >> space >> integer.as(:goto_line_number)).as(:goto) }
+
+  rule(:statement) { cls | rem | screen | window | assignment | array_assignment | dim | beep | randomize | if_statement | goto | pset | for_loop | line | for_next | input_char | program_end }
+
+  rule(:program_line) { integer.as(:line_no) >> (space >> str(":").maybe >> space >> statement).repeat(1).as(:statements) }
+
+  root(:program_line)
+end
+
+class BasicFractalSVGProducer
+  attr_accessor :vars, :last_point, :for_loop_statement_index_hash, :for_loop_value_hash, :for_loop_to_value_hash, :for_loop_step_size_hash
+  def initialize(filename, scale=1.0, debug=false)
+    @scale = scale
+    @debug = debug
+    @line_statement_hash = Hash.new
+    @all_statements = []
+    @for_loop_statement_index_hash = Hash.new
+    @for_loop_value_hash = Hash.new
+    @for_loop_to_value_hash = Hash.new
+    @for_loop_step_size_hash = Hash.new
+    statement_index = 0
+    File.read(filename).split("\n").each do |line|
+      puts line if @debug
+      parsed_line = LineParser.new.parse(line)
+      line_no = parsed_line[:line_no][:integer].to_i
+      puts parsed_line if @debug
+      statements = parsed_line[:statements]
+      @line_statement_hash[line_no] = statement_index
+      statements.each do |statement|
+        @all_statements<< statement
+        statement_index += 1
+      end
+    end
+    @vars = Hash.new(0)
+    @last_point = [0.0, 0.0]
+    @rng = Random.new
+  end
+
+  def save(svg_filename)
+    statement_index = 0
+    while true
+      statement = @all_statements[statement_index]
+      if @debug
+        puts @vars
+        # puts @for_loop_value_hash
+        puts statement
+      end
+      st = StatementTransform.new
+      statement_index = st.apply(statement, :fsp => self, :si => statement_index)
+      break unless statement_index
+    end
+    if @svg
+      @svg.save(svg_filename)
+    end
+  end
+
+  def cos(x)
+    Math.cos(x)
+  end
+
+  def sin(x)
+    Math.sin(x)
+  end
+
+  def sqr(x)
+    Math.sqrt(x)
+  end
+
+  def abs(x)
+    x.abs
+  end
+
+  def line(from, to)
+    from = @last_point unless from
+    if @svg
+      @svg.line(x1: "#{@scale * (from[:x] - @x1)}", y1: "#{@scale * (@y2 - from[:y])}",
+                x2: "#{@scale * (to[:x] - @x1)}", y2: "#{@scale * (@y2 - to[:y])}", stroke: "black", stroke_width: "#{@scale * (@x2 - @x1)/1000.0}")
+    end
+    @last_point = to
+  end
+
+  def pset(point)
+    if @svg
+      @svg.circle(cx: "#{@scale * (point[:x] - @x1)}", cy: "#{@scale * (@y2 - point[:y])}", r: "#{@scale * (@x2 - @x1)/1000.0}", fill: "black")
+    end
+    @last_point = point
+  end
+
+  def randomize(seed)
+    @rng = Random.new(seed)
+  end
+
+  def timer
+    Time.new.to_i
+  end
+
+  def rnd(max=1.0)
+    @rng.rand(max.to_f)
+  end
+
+  def window(x1, y1, x2, y2)
+    @x1 = x1
+    @y1 = y1
+    @x2 = x2
+    @y2 = y2
+    width = x2 - x1
+    height = y2 - y1
+    @svg = Victor::SVG.new(width: "#{@scale * width}", height: "#{@scale * height}") unless @svg
+  end
+
+  def get_goto(goto_line_number)
+    @line_statement_hash[goto_line_number]
+  end
+end
+
+class StatementTransform < Parslet::Transform
+  rule(:rem => {:comment => simple(:comment)}) { comment; si + 1 }
+  rule(:screen => subtree(:screen)) { screen; si + 1}
+  rule(:window => {:x1 => simple(:x1), :y1 => simple(:y1), :x2 => simple(:x2), :y2 => simple(:y2)}) { fsp.window(x1, y1, x2, y2); si + 1 }
+  rule(:float => simple(:x)) { x.to_f }
+  rule(:integer => simple(:x)) { x.to_i }
+  rule(:negation => simple(:x)) {  -1 * x }
+  rule(:fun_name => simple(:fun_name), :arg => simple(:x)) { if fsp.vars.keys.index(fun_name.to_s); fsp.vars[fun_name.to_s][x]; else; fsp.send(fun_name.to_s.downcase.to_s, x); end }
+  rule(:dim => {:var_name => simple(:var_name), :size => simple(:size)}) { fsp.vars[var_name.to_s] = Array.new(size, 0); si + 1 }
+  rule(:l => simple(:l), :o => ">", :r => simple(:r)) { l > r}
+  rule(:l => simple(:l), :o => "<", :r => simple(:r)) { l < r}
+  rule(:l => simple(:l), :o => "*", :r => simple(:r)) { l * r}
+  rule(:l => simple(:l), :o => "/", :r => simple(:r)) { l.to_f / r.to_f}
+  rule(:l => simple(:l), :o => "+", :r => simple(:r)) { l + r}
+  rule(:l => simple(:l), :o => "-", :r => simple(:r)) { l - r}
+  rule(:l => simple(:l), :o => "^", :r => simple(:r)) { l.to_f ** r.to_f}
+  rule(:l => simple(:l), :o => " MOD ", :r => simple(:r)) { l % r}
+  rule(:point => subtree(:point)) { point }
+  rule(:var_name => simple(:var_name)) { if fsp.methods.index(var_name.to_s.downcase.to_sym); fsp.send(var_name.to_s.downcase.to_sym); else; fsp.vars[var_name.to_s]; end }
+  rule(:randomize => {:seed => simple(:seed)}) { fsp.randomize(seed); si + 1 }
+  rule(:pset => subtree(:point)) { fsp.pset(point); si + 1 }
+  rule(:for_loop => {:for_variable => simple(:for_variable),
+                     :for_start_value => simple(:for_start_value),
+                     :for_to_value => simple(:for_to_value),
+                     :for_step_size => simple(:for_step_size)}) { fsp.for_loop_statement_index_hash[for_variable.to_s] = si; fsp.for_loop_value_hash[for_variable.to_s] = for_start_value; fsp.vars[for_variable.to_s] = fsp.for_loop_value_hash[for_variable.to_s]; fsp.for_loop_to_value_hash[for_variable.to_s] = for_to_value; if for_step_size; fsp.for_loop_step_size_hash[for_variable.to_s] = for_step_size; else; fsp.for_loop_step_size_hash[for_variable.to_s] = 1; end; si + 1 }
+  rule(:for_next => {:for_variable => simple(:for_variable)}) { fsp.for_loop_value_hash[for_variable.to_s] += fsp.for_loop_step_size_hash[for_variable.to_s]; fsp.vars[for_variable.to_s] = fsp.for_loop_value_hash[for_variable.to_s]; if fsp.for_loop_value_hash[for_variable.to_s] <= fsp.for_loop_to_value_hash[for_variable.to_s]; fsp.for_loop_statement_index_hash[for_variable.to_s] + 1; else; si + 1; end }
+  rule(:if_statement => {:condition => simple(:condition), :then_statement_str => simple("then_statement_str")}) { if condition; StatementTransform.new.apply(LineParser.new.statement.parse(then_statement_str.to_s), :fsp => fsp, :si => si); end; si + 1}
+  rule(:goto => {:goto_line_number => simple(:goto_line_number)}) { fsp.get_goto(goto_line_number) }
+  rule(:assignee => simple(:assignee)) { assignee }
+  rule(:assignment => subtree(:assignment)) { fsp.vars[assignment[:assignee].to_s] = assignment[:assigned_exp] ; si + 1}
+  rule(:array_assignment => {:array_assignee => simple(:array_assignee), :index => simple(:index), :assigned_exp => simple(:assigned_exp)}) { fsp.vars[array_assignee.to_s][index] = assigned_exp; si + 1}
+  rule(:exp => simple(:exp)) { exp }
+  rule(:line => {:from => subtree(:from), :to => subtree(:to)}) { fsp.line(from, to); si + 1 }
+  rule(:input_char => subtree(:i)) { si + 1 }
+  rule(:program_end => "END") { nil }
+end
+
+if ARGV.length >= 2
+  scale = 1.0
+  scale = ARGV[2].to_f if ARGV.length >= 3 and ARGV[2].to_f > 0
+  BasicFractalSVGProducer.new(ARGV[0], scale=scale, debug=false).save(ARGV[1])
+end
