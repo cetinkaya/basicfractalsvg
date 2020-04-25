@@ -10,4 +10,6 @@ basicfractalsvg can currently parse some of the BASIC programs (e.g., ARCHI, BRO
 basicfractalsvg BROWNL BROWNL.svg 500
 ```
 
-reads BASIC code from `BROWNL` file to generate `BROWNL.svg` image after applying a scaling of `500` units. 
+reads BASIC code from `BROWNL` file to generate `BROWNL.svg` image after applying a scaling of `500` units. For the basic program `BROWNL` listed in the abovementioned book by Lauwerier (1991), `BROWNL.svg` looks like:
+
+![BROWNL.svg](examples/BROWNL.svg)
