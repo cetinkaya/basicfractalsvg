@@ -7,9 +7,9 @@ basicfractalsvg can currently parse some of the BASIC programs (e.g., ARCHI, BRO
 ## Use
 
 ```sh
-basicfractalsvg BROWNL BROWNL.svg 500
+basicfractalsvg HENON HENON.svg 500
 ```
 
-reads BASIC code from `BROWNL` file to generate `BROWNL.svg` image after applying a scaling of `500` units. For the basic program `BROWNL` listed in the abovementioned book by Lauwerier (1991), `BROWNL.svg` looks like:
+reads BASIC code from `HENON` file to generate `HENON.svg` image after applying a scaling of `500` units. For the basic program `HENON` listed in the abovementioned book by Lauwerier (1991), `HENON.svg` shows the orbits of "Hénon's quadratic system" mentioned in the book. 
 
-![BROWNL.svg](examples/BROWNL.svg)
+![HENON.svg](examples/BROWNL.svg)
