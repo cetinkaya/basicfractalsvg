@@ -87,9 +87,9 @@ class LineParser < Parslet::Parser
 
   rule(:beep) { str("BEEP") }
 
-  rule(:dim) { (str("DIM") >> space >>
-                var >> str("(") >>
-                var.as(:size) >> str(")")).as(:dim) }
+  rule(:dim) { (str("DIM") >> (space.maybe >> str(",").maybe >> space >>
+                               var >> str("(") >>
+                               var.as(:size) >> str(")")).repeat(1).as(:arrays)).as(:dim) }
 
   rule(:pset) { (str("PSET") >> space >> point >> (match('[,]') >> exp.as(:color_exp)).maybe.as(:color)).as(:pset)}
 
@@ -235,7 +235,9 @@ class StatementTransform < Parslet::Transform
   rule(:integer => simple(:x)) { x.to_i }
   rule(:negation => simple(:x)) {  -1 * x }
   rule(:fun_name => simple(:fun_name), :arg => simple(:x)) { if fsp.vars.keys.index(fun_name.to_s); fsp.vars[fun_name.to_s][x]; else; fsp.send(fun_name.to_s.downcase.to_s, x); end }
-  rule(:dim => {:var_name => simple(:var_name), :size => simple(:size)}) { fsp.vars[var_name.to_s] = Array.new(size, 0); si + 1 }
+  rule(:var_name => simple(:var_name), :size => simple(:size)) { fsp.vars[var_name.to_s] = Array.new(size, 0); si + 1 }
+  rule(:dim => {:arrays => sequence(:arrays)}) { si + 1 }
+  # rule(:dim => {:var_name => simple(:var_name), :size => simple(:size)}) { fsp.vars[var_name.to_s] = Array.new(size, 0); si + 1 }
   rule(:l => simple(:l), :o => ">", :r => simple(:r)) { l > r}
   rule(:l => simple(:l), :o => "<", :r => simple(:r)) { l < r}
   rule(:l => simple(:l), :o => "*", :r => simple(:r)) { l * r}
